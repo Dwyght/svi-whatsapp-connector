@@ -1,0 +1,7 @@
+interface:
+  display_name: "Spring Boot Production Engineering"
+  short_description: "Build and review production Spring Boot backends"
+  default_prompt: "Use $springboot-production-engineering to implement and verify this Spring Boot backend change with production-grade design, security, and reliability."
+
+policy:
+  allow_implicit_invocation: true

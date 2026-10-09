@@ -1,0 +1,32 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+
+This is a single-module Java 25 Spring Boot application built with Maven. Production code lives under `src/main/java/com/svi/whatsapp_connector/`. Keep HTTP concerns in `controller/`, orchestration and dispatch in `service/`, external integrations in `client/`, contracts in `dto/`, internal records in `model/`, conversion in `mapper/`, and trust-boundary code in `security/`. Configuration is under `src/main/resources/`; tests mirror the main package tree and keep webhook fixtures in `src/test/resources/fixtures/whatsapp/`.
+
+## Build, Test, and Development Commands
+
+Use the checked-in Maven wrapper so contributors share the same Maven version.
+
+- `./mvnw spring-boot:run -Dspring-boot.run.profiles=local` (Windows: `.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"`) starts the local in-memory service.
+- `./mvnw test` runs the JUnit test suite and Spring context checks.
+- `./mvnw clean verify` performs a clean compilation and all verification steps.
+- `./mvnw package` creates the executable JAR in `target/`.
+
+Run commands from the repository root. Do not commit generated `target/` content.
+
+## Coding Style & Naming Conventions
+
+Follow standard Java naming: `PascalCase` for classes and interfaces, `camelCase` for methods and variables, and uppercase snake case for constants. Retain the root package `com.svi.whatsapp_connector`. Match the existing Spring-generated style: tabs for indentation, opening braces on the declaration line, and one public top-level type per file. Prefer constructor injection for Spring dependencies and small classes with a single responsibility. No formatter or linter is currently configured; use IDE formatting and remove unused imports before committing.
+
+## Testing Guidelines
+
+Tests use JUnit Jupiter, Mockito, MockMvc, and mocked HTTP boundaries. Name test classes with the `Tests` suffix and methods for behavior, for example `rejectsInvalidWebhookSignature()`. Add focused tests for services, clients, mappers, concurrency, and signature validation; reserve `@SpringBootTest` for application wiring. Tests must not need real Meta or OpenAI credentials.
+
+## Commit & Pull Request Guidelines
+
+The short history does not establish a formal convention. Use concise, imperative subjects such as `Add webhook signature validation` and keep commits focused. Pull requests should explain the change, list verification commands, link relevant issues, and call out configuration or API-contract changes. Include sample requests or responses when endpoint behavior changes.
+
+## Security & Configuration
+
+Never commit access tokens, webhook secrets, customer phone numbers, message bodies, or private API URLs. Supply secrets through environment variables; `.env.example` is an inventory and is not loaded automatically. The nondurable dispatcher must remain limited to `local` and `test`; production requires a durable implementation.
