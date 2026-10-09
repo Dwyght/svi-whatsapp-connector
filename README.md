@@ -1,27 +1,36 @@
 # SVI WhatsApp AI Messaging Connector
 
-This Spring Boot service connects inbound customer-initiated WhatsApp conversations to a replaceable AI provider. It authenticates Meta webhooks, accepts text messages, generates a reply with the configured AI client, and sends the reply through the official WhatsApp Cloud API.
+This Spring Boot service connects inbound customer-initiated WhatsApp conversations to a replaceable AI provider. It also exposes a guarded local API for testing application-initiated, approved-template messages. Both directions send through the official WhatsApp Cloud API.
 
-The project is a WhatsApp integration component, not a chatbot platform. Media processing, campaigns, voice calls, persistence, multi-tenancy, a frontend, and cloud deployment are outside this version's scope.
+The current feature is a WhatsApp integration component, not a chatbot platform. The root package is channel-neutral so additional messaging connectors can be added later without coupling them to WhatsApp. Media processing, campaigns, voice calls, persistence, multi-tenancy, a frontend, and cloud deployment are outside this version's scope.
 
 ## Architecture
 
-The application uses a traditional layered architecture under `com.svi.whatsapp_connector`:
+The application uses feature-based packages directly under `com.svi.messaging`:
 
 ```text
-controller/       Webhook HTTP endpoints
-service/          Ingestion, dispatch, and message orchestration
-client/           Meta Cloud API and AI provider adapters
-dto/request/      Meta webhook and outbound request contracts
-dto/response/     External API response contracts
-mapper/           Meta payload to internal model conversion
-model/            Provider-neutral immutable messages
-config/           Validated properties and HTTP clients
-security/         HMAC verification and request-size enforcement
-exception/        Failure categories and safe HTTP errors
+com.svi.messaging/
+├── MessagingApplication.java
+├── whatsapp/
+│   ├── controller/    Webhook and local outbound endpoints
+│   ├── service/       Processing, dispatch, ordering, and idempotency
+│   ├── client/        Meta WhatsApp Cloud API adapter
+│   ├── dto/           Webhook, template, and provider contracts
+│   ├── mapper/        Meta payload conversion
+│   ├── model/         WhatsApp ingestion models
+│   ├── security/      Webhook and local outbound authentication
+│   ├── config/        WhatsApp properties and HTTP configuration
+│   └── exception/     WhatsApp endpoint and provider failures
+├── ai/
+│   ├── client/        Replaceable AI boundary and adapters
+│   ├── config/        AI provider properties and client construction
+│   ├── dto/           Channel-neutral AI request/response contracts
+│   └── exception/     AI provider failures
+└── common/
+    └── exception/     Shared external-failure classification
 ```
 
-`AiClient` is the replaceable AI boundary. `InboundMessageDispatcher` separates the webhook from long-running AI and Meta calls.
+Dependency direction is `whatsapp -> ai -> common`, with WhatsApp also using `common` directly. The AI and common packages have no WhatsApp dependency. `AiClient` is the reusable AI boundary for future channels, while `InboundMessageDispatcher` separates the WhatsApp webhook from long-running AI and Meta calls.
 
 ## Message Flow
 
@@ -33,6 +42,17 @@ exception/        Failure categories and safe HTTP errors
 6. Operational metrics and redacted logs record outcomes without logging tokens, phone numbers, or message text.
 
 The initial AI interaction is stateless. No conversation history is stored or sent to the AI provider.
+
+### Application-Initiated Flow
+
+1. A developer submits one template request to `POST /api/v1/whatsapp/messages` using Postman.
+2. The local-only endpoint validates its bearer token, request fields, recipient/template allowlists, and idempotency key.
+3. `OutboundMessageService` reserves the idempotency key and delegates to `WhatsAppApiClient`.
+4. The client sends an official `type: template` payload to Meta's Messages API.
+5. A `202 Accepted` response means Meta supplied a provider message ID. It does **not** prove delivery; delivery state arrives later through Meta webhooks.
+6. If the recipient replies, the existing webhook-to-AI-to-text-reply flow handles that inbound message independently.
+
+WhatsApp business-initiated conversations generally require an approved template outside the customer-service window. This API deliberately does not expose arbitrary outbound free-form text.
 
 ## Prerequisites
 
@@ -55,18 +75,65 @@ Required variables:
 | `WHATSAPP_ACCESS_TOKEN` | Meta access token with messaging permission |
 | `META_APP_SECRET` | App secret used to authenticate webhook bodies |
 | `WHATSAPP_VERIFY_TOKEN` | Private value you choose and also enter in Meta's webhook configuration |
+| `OUTBOUND_LOCAL_AUTH_TOKEN` | Private bearer token protecting the local outbound endpoint |
+| `OUTBOUND_ALLOWED_RECIPIENTS` | Comma-separated Meta-verified test numbers, digits only and without `+` |
+| `OUTBOUND_ALLOWED_TEMPLATES` | Comma-separated approved template names; defaults to `hello_world` |
 
 `META_GRAPH_BASE_URL` defaults to `https://graph.facebook.com`. Do not add `v` or a version to that base URL; the configured `META_GRAPH_API_VERSION` is added separately.
 
 ## Run Locally with Mock AI
 
-Set the five required Meta variables, then start the explicit local profile:
+Set the Meta variables and the outbound local token/recipient allowlist, then start the explicit local profile:
 
 ```powershell
 .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"
 ```
 
 The local profile defaults `AI_PROVIDER` to `mock`. Its deterministic response is `Mock AI response: <customer text>`. Health information is available at `GET /actuator/health`; only `health` and `info` Actuator endpoints are exposed.
+
+## Test an Outbound Template with Postman
+
+Use only a recipient that you explicitly added and verified in Meta's test environment. Set `OUTBOUND_ALLOWED_RECIPIENTS` to that number in international digits-only form, restart the local profile, and create this Postman request:
+
+```http
+POST http://localhost:8080/api/v1/whatsapp/messages
+Authorization: Bearer <value of OUTBOUND_LOCAL_AUTH_TOKEN>
+Idempotency-Key: hello-world-test-001
+Content-Type: application/json
+```
+
+```json
+{
+  "recipient": "639123456789",
+  "templateName": "hello_world",
+  "languageCode": "en_US"
+}
+```
+
+The number above is a placeholder; replace it with the verified test recipient. The pre-approved `hello_world` template takes no parameters. For another allowlisted and approved template with body placeholders, supply ordered text values:
+
+```json
+{
+  "recipient": "639123456789",
+  "templateName": "order_update",
+  "languageCode": "en_US",
+  "parameters": ["Dwyght", "A-123"]
+}
+```
+
+An accepted submission returns HTTP `202`:
+
+```json
+{
+  "providerMessageId": "wamid...",
+  "submissionStatus": "ACCEPTED_BY_PROVIDER",
+  "idempotentReplay": false
+}
+```
+
+Repeat the exact request with the same `Idempotency-Key` to receive the stored response with `idempotentReplay: true` and no second Meta call. Reusing a key for different content returns `409 Conflict`. After a timeout or other ambiguous Meta failure, the same key is blocked because the original message might have been accepted.
+
+In the Meta Developer Dashboard, confirm that the recipient is registered as a test recipient and that `hello_world` is available for the configured WhatsApp Business Account. A local `202` proves provider acceptance only. Confirm receipt on the actual device or inspect later delivery-status webhooks before claiming delivery.
 
 ## Configure Meta and ngrok
 
@@ -104,8 +171,10 @@ Tests use mocked/stubbed external boundaries and require no Meta or OpenAI crede
 
 ## Development Limitations
 
-The `local` and `test` profiles use a bounded process-local queue and TTL deduplication map. A `202` means the event was accepted into memory, not durably stored. Restart, crash, or asynchronous provider failure can lose work. Deduplication is process-local and does not provide exactly-once delivery. Hash-based worker lanes preserve practical ordering within one process but are not distributed ordering.
+The `local` and `test` profiles use a bounded process-local queue and TTL deduplication map. A `202` from the webhook endpoint means the inbound event was accepted into memory, not durably stored. Restart, crash, or asynchronous provider failure can lose work. Deduplication is process-local and does not provide exactly-once delivery. Hash-based worker lanes preserve practical ordering within one process but are not distributed ordering.
+
+Outbound idempotency is also bounded, TTL-based, and process-local. It prevents common duplicate Postman submissions within one running instance but is lost on restart and cannot coordinate multiple instances. The local bearer token and allowlists are development safeguards, not production service-to-service security or consent enforcement.
 
 There is deliberately no production dispatcher bean. Starting without `local` or `test` fails rather than silently using nondurable infrastructure.
 
-Before production deployment, add durable event storage or a message broker, transactional deduplication and an outbound outbox, controlled retries/dead-letter handling, distributed conversation ordering, production secret management, TLS/network controls, persistent observability, alerts, and deployment/runbook automation. Live credential, rate-limit, failover, and end-to-end Meta tests must also be completed.
+Before production deployment, add durable event storage or a message broker, transactional deduplication and an outbound outbox, controlled retries/dead-letter handling, distributed conversation ordering, service-to-service authentication and authorization, recipient consent/policy enforcement, audit records, production secret management, TLS/network controls, persistent observability, alerts, and deployment/runbook automation. Live credential, rate-limit, failover, and end-to-end Meta tests must also be completed.

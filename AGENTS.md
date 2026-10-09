@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a single-module Java 25 Spring Boot application built with Maven. Production code lives under `src/main/java/com/svi/whatsapp_connector/`. Keep HTTP concerns in `controller/`, orchestration and dispatch in `service/`, external integrations in `client/`, contracts in `dto/`, internal records in `model/`, conversion in `mapper/`, and trust-boundary code in `security/`. Configuration is under `src/main/resources/`; tests mirror the main package tree and keep webhook fixtures in `src/test/resources/fixtures/whatsapp/`.
+This is a single-module Java 25 Spring Boot application built with Maven. Production code lives under `src/main/java/com/svi/messaging/` and is organized by feature. Keep WhatsApp HTTP, orchestration, Meta integration, DTOs, models, security, and configuration under `whatsapp/`. Keep the channel-neutral AI boundary and adapters under `ai/`; that package must not depend on WhatsApp. Put only genuinely cross-feature types under `common/`. Tests mirror the main package tree, with shared test factories under `com.svi.messaging.support` and webhook fixtures in `src/test/resources/fixtures/whatsapp/`.
 
 ## Build, Test, and Development Commands
 
@@ -17,7 +17,7 @@ Run commands from the repository root. Do not commit generated `target/` content
 
 ## Coding Style & Naming Conventions
 
-Follow standard Java naming: `PascalCase` for classes and interfaces, `camelCase` for methods and variables, and uppercase snake case for constants. Retain the root package `com.svi.whatsapp_connector`. Match the existing Spring-generated style: tabs for indentation, opening braces on the declaration line, and one public top-level type per file. Prefer constructor injection for Spring dependencies and small classes with a single responsibility. No formatter or linter is currently configured; use IDE formatting and remove unused imports before committing.
+Follow standard Java naming: `PascalCase` for classes and interfaces, `camelCase` for methods and variables, and uppercase snake case for constants. Retain the root package `com.svi.messaging` and place new channel connectors directly beneath it without a `features` wrapper. Match the existing Spring-generated style: tabs for indentation, opening braces on the declaration line, and one public top-level type per file. Prefer constructor injection for Spring dependencies and small classes with a single responsibility. No formatter or linter is currently configured; use IDE formatting and remove unused imports before committing.
 
 ## Testing Guidelines
 
@@ -30,3 +30,5 @@ The short history does not establish a formal convention. Use concise, imperativ
 ## Security & Configuration
 
 Never commit access tokens, webhook secrets, customer phone numbers, message bodies, or private API URLs. Supply secrets through environment variables; `.env.example` is an inventory and is not loaded automatically. The nondurable dispatcher must remain limited to `local` and `test`; production requires a durable implementation.
+
+The outbound REST endpoint must also remain limited to `local` and `test`. It requires bearer authentication, recipient/template allowlists, and an `Idempotency-Key`. Preserve the distinction between Meta accepting a submission and confirming delivery through a later webhook. The process-local outbound idempotency store is bounded and nondurable; do not enable it as a production delivery mechanism.
